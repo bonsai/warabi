@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Jelly Iridescent</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#888; }
+    canvas { display:block; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.171.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.171.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { ARButton } from 'three/addons/webxr/ARButton.js';
+
+const scene = new THREE.Scene();
+// ARでは背景を透明にしてカメラ映像を通す。デスクトップではCSSのグレーが見えるようにalpha:trueにする
+// scene.background = new THREE.Color(0x888888); // 削除
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0, 0, 8);
+
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha: true}); // alpha: true 追加
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+renderer.xr.enabled = true; // WebXR有効化
+document.body.appendChild(renderer.domElement);
+
+// ARボタン追加（DOMオーバーレイを有効にして、AR中もタップ判定などが効くようにする）
+document.body.appendChild(ARButton.createButton(renderer, {
+  optionalFeatures: ['dom-overlay'],
+  domOverlay: { root: document.body }
+}));
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+// 光（虹色感を強く出す）
+const light = new THREE.DirectionalLight(0xffffff, 3);
+light.position.set(5, 8, 6);
+scene.add(light);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+
+// ゼリー本体
+const geometry = new THREE.IcosahedronGeometry(1.8, 5); // 細かく分割
+
+const material = new THREE.MeshPhysicalMaterial({
+  color: 0xffffff,
+  metalness: 0.0,
+  roughness: 0.15,          // 反射を少しぼかす（うっすら）
+  transmission: 0.99,       // ほぼ透明
+  ior: 1.4,                 // ゼリーの屈折率
+  thickness: 0.5,
+  iridescence: 1.0,         // 虹色
+  iridescenceIOR: 1.33,
+  iridescenceThicknessRange: [100, 800],
+  clearcoat: 0.1,           // コーティング反射を控えめに
+  clearcoatRoughness: 0.1,
+  side: THREE.DoubleSide
+});
+
+// vertex shaderでぷるぷる揺らす＋虹色のための座標渡し
+material.onBeforeCompile = (shader) => {
+  shader.uniforms.time = { value: 0 };
+  material.userData.shader = shader;
+
+  shader.vertexShader = `
+    uniform float time;
+    varying vec3 vMyNormal;
+    varying vec3 vMyViewDir;
+    ${shader.vertexShader}
+  `.replace(
+    `#include <begin_vertex>`,
+    `#include <begin_vertex>
+
+    // ゆったり大きく揺らす（ぷるぷる感）
+    float wave = sin(position.x * 2.5 + time * 3.0) * 0.1
+               + sin(position.y * 3.0 + time * 2.5) * 0.1
+               + sin(position.z * 3.5 + time * 2.8) * 0.05;
+    transformed += normal * wave;
+    
+    // 視線計算用（View Space）
+    vMyNormal = normalize(normalMatrix * normal);
+    vec4 mvPos = modelViewMatrix * vec4(transformed, 1.0);
+    vMyViewDir = -mvPos.xyz;
+    `
+  );
+
+  shader.fragmentShader = `
+    uniform float time;
+    varying vec3 vMyNormal;
+    varying vec3 vMyViewDir;
+    ${shader.fragmentShader}
+  `.replace(
+    `#include <color_fragment>`,
+    `#include <color_fragment>
+    
+    // 全体を虹色にする（視線角度依存）
+    vec3 viewDir = normalize(vMyViewDir);
+    vec3 myNormal = normalize(vMyNormal);
+    float viewAngle = dot(myNormal, viewDir); // 0.0 ~ 1.0
+
+    // 視野角に応じて色を変える
+    // 0.0~1.0 の viewAngle を 0.0~0.4 くらいの範囲にマップして色数を絞る
+    float hue = viewAngle * 0.5 + time * 0.1; 
+    
+    // 虹色生成 (cosine palette)
+    vec3 rainbow = 0.5 + 0.5 * cos(6.28 * (hue + vec3(0.0, 0.33, 0.67)));
+    
+    // 発光感を出すために少し明るく
+    rainbow += 0.1;
+    
+    diffuseColor.rgb = rainbow;
+    `
+  );
+};
+
+const jelly = new THREE.Mesh(geometry, material);
+jelly.position.set(0, 0, -2); // AR開始位置（目の前）に合わせる
+scene.add(jelly);
+
+// 3回連打で消えるロジック
+let clickTimes = [];
+window.addEventListener('pointerdown', () => {
+  const now = Date.now();
+  clickTimes.push(now);
+  // 直近600ms以内のクリックだけ残す
+  clickTimes = clickTimes.filter(t => now - t < 600);
+  
+  if (clickTimes.length >= 3) {
+    // 3回連打達成！
+    jelly.visible = false;
+    // あるいは弾けて消える演出などを入れても良い
+    clickTimes = [];
+  }
+});
+
+// アニメーション
+let time = 0;
+renderer.setAnimationLoop(() => { // requestAnimationFrameから変更
+  time += 0.016;
+
+  if (material.userData.shader) {
+    material.userData.shader.uniforms.time.value = time;
+  }
+  jelly.rotation.y += 0.003;
+
+  controls.update();
+  renderer.render(scene, camera);
+});
+// function animate() ... animate(); は削除
+
+// リサイズ対応
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
