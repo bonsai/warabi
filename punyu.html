@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Jelly Iridescent</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#888; }
+    canvas { display:block; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.171.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.171.0/examples/jsm/"
+    }
+  }
+  </script>
+  <!-- MediaPipe -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <!-- GIF.js -->
+  <script src="gif.js"></script>
+</head>
+<body>
+<!-- Video Element for MediaPipe (Hidden) -->
+<video id="input_video" style="display:none"></video>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0, 0, 8);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.enableRotate = false; // 自転・公転させない（手動操作もロックした方が良いかもだが、一旦回転のみロック）
+controls.enableZoom = false;
+controls.enablePan = false;
+
+// --------------------------------------------------------
+// 背景（カメラ映像＋グレー＋荒く）
+// --------------------------------------------------------
+const videoElement = document.getElementById('input_video');
+const videoTexture = new THREE.VideoTexture(videoElement);
+videoTexture.colorSpace = THREE.SRGBColorSpace;
+
+const bgGeometry = new THREE.PlaneGeometry(2, 2);
+const bgMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    tDiffuse: { value: videoTexture },
+    resolution: { value: new THREE.Vector2(innerWidth, innerHeight) }
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = vec4( position, 1.0 );
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform vec2 resolution;
+    varying vec2 vUv;
+    
+    void main() {
+      // 左右反転 (Mirror)
+      vec2 uv = vec2(1.0 - vUv.x, vUv.y);
+
+      // ピクセル化（より細かく）
+      float pixelSize = 4.0; // 10.0 -> 4.0
+      vec2 dxy = pixelSize / resolution;
+      vec2 coord = floor(uv / dxy) * dxy;
+      
+      vec4 color = texture2D(tDiffuse, coord);
+      
+      // グレースケール & 暗くする (More Black)
+      float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+      gl_FragColor = vec4(vec3(gray * 0.05), 1.0); // 0.15 -> 0.05 (Darker)
+    }
+  `,
+  depthTest: false,
+  depthWrite: false
+});
+const bgMesh = new THREE.Mesh(bgGeometry, bgMaterial);
+scene.add(bgMesh);
+
+// --------------------------------------------------------
+// 光
+// --------------------------------------------------------
+const light = new THREE.DirectionalLight(0xffffff, 3);
+light.position.set(5, 8, 6);
+scene.add(light);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+
+// --------------------------------------------------------
+// ゼリー本体
+// --------------------------------------------------------
+const geometry = new THREE.IcosahedronGeometry(1.8, 20); // より細かく
+
+const material = new THREE.MeshPhysicalMaterial({
+  color: 0xffffff,
+  metalness: 0.0,
+  roughness: 0.15,
+  transmission: 0.99,
+  ior: 1.4,
+  thickness: 0.5,
+  iridescence: 1.0,
+  iridescenceIOR: 1.33,
+  iridescenceThicknessRange: [100, 800],
+  clearcoat: 0.1,
+  clearcoatRoughness: 0.1,
+  side: THREE.DoubleSide
+});
+
+// インタラクション用のUniform
+const interactionUniforms = {
+  uHandPos: { value: new THREE.Vector3(999, 999, 999) }, // 手の位置
+  uStrength: { value: 0.0 } // 押す強さ
+};
+
+material.onBeforeCompile = (shader) => {
+  shader.uniforms.time = { value: 0 };
+  shader.uniforms.uHandPos = interactionUniforms.uHandPos;
+  shader.uniforms.uStrength = interactionUniforms.uStrength;
+  
+  material.userData.shader = shader;
+
+  shader.vertexShader = `
+    uniform float time;
+    uniform vec3 uHandPos;
+    uniform float uStrength;
+    varying vec3 vMyNormal;
+    varying vec3 vMyViewDir;
+    ${shader.vertexShader}
+  `.replace(
+    `#include <begin_vertex>`,
+    `#include <begin_vertex>
+
+    // 距離ベースの変形（手が近いとへこむ・揺れる）
+    float dist = distance(position, uHandPos);
+    float effect = smoothstep(1.5, 0.0, dist) * uStrength; // 近いほど影響大
+    
+    // ぷるぷる（基本）
+    float baseWave = sin(position.x * 2.5 + time * 3.0) * 0.1
+                   + sin(position.y * 3.0 + time * 2.5) * 0.1
+                   + sin(position.z * 3.5 + time * 2.8) * 0.05;
+
+    // 接触時の激しい揺れ
+    float touchWave = sin(position.x * 10.0 + time * 20.0) * 0.2
+                    + sin(position.y * 12.0 + time * 18.0) * 0.2;
+    
+    float wave = baseWave + touchWave * effect;
+    
+    // 手が触れている方向に少し押し込む
+    vec3 pushDir = normalize(position - uHandPos);
+    transformed += normal * wave + pushDir * effect * 0.5;
+    
+    // 視線計算用
+    vMyNormal = normalize(normalMatrix * normal);
+    vec4 mvPos = modelViewMatrix * vec4(transformed, 1.0);
+    vMyViewDir = -mvPos.xyz;
+    `
+  );
+
+  shader.fragmentShader = `
+    uniform float time;
+    varying vec3 vMyNormal;
+    varying vec3 vMyViewDir;
+    ${shader.fragmentShader}
+  `.replace(
+    `#include <color_fragment>`,
+    `#include <color_fragment>
+    
+    vec3 viewDir = normalize(vMyViewDir);
+    vec3 myNormal = normalize(vMyNormal);
+    float viewAngle = dot(myNormal, viewDir);
+
+    float hue = viewAngle * 0.5 + time * 0.1; 
+    vec3 rainbow = 0.5 + 0.5 * cos(6.28 * (hue + vec3(0.0, 0.33, 0.67)));
+    rainbow += 0.1;
+    diffuseColor.rgb = rainbow;
+    `
+  );
+};
+
+const jelly = new THREE.Mesh(geometry, material);
+jelly.position.set(0, 0, 0);
+jelly.scale.set(0.5, 0.5, 0.5); // はじめは半分の大きさ
+scene.add(jelly);
+
+// --------------------------------------------------------
+// Finger Markers (Up to 10 dots)
+// --------------------------------------------------------
+const MAX_FINGERS = 10;
+const markers = [];
+const markerGroup = new THREE.Group();
+scene.add(markerGroup);
+
+// Glow Texture Generation (Restore)
+const canvas = document.createElement('canvas');
+canvas.width = 64;
+canvas.height = 64;
+const ctx = canvas.getContext('2d');
+const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+gradient.addColorStop(0, 'rgba(255, 255, 0, 0.6)');
+gradient.addColorStop(1, 'rgba(255, 255, 0, 0.0)');
+ctx.fillStyle = gradient;
+ctx.fillRect(0, 0, 64, 64);
+const glowTexture = new THREE.CanvasTexture(canvas);
+
+// Create pool of markers
+for (let i = 0; i < MAX_FINGERS; i++) {
+  const g = new THREE.Group();
+  
+  // Core Dot
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.1, 16, 16),
+    new THREE.MeshBasicMaterial({ color: 0xffff00 })
+  );
+  g.add(dot);
+
+  // Glow
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ 
+      map: glowTexture, 
+      transparent: true, 
+      blending: THREE.AdditiveBlending 
+    })
+  );
+  sprite.scale.set(0.8, 0.8, 1.0);
+  g.add(sprite);
+  
+  g.visible = false;
+  markerGroup.add(g);
+  markers.push(g);
+}
+
+// Previous positions for velocity calculation
+// Key: "handIndex_tipIndex", Value: { pos: Vector3, time: number }
+const prevFingerStates = {}; 
+
+// --------------------------------------------------------
+// MediaPipe Hands Setup
+// --------------------------------------------------------
+const fingerTipIndices = [4, 8, 12, 16, 20]; // Thumb, Index, Middle, Ring, Pinky
+const fingerPipIndices = [2, 6, 10, 14, 18]; // PIP or equivalent lower joint
+
+// GIF Recording State
+let isRecording = false;
+let peaceSignDuration = 0;
+let gif = null;
+const RECORD_DURATION = 3000; // 3 seconds recording
+let recordStartTime = 0;
+
+function onResults(results) {
+  // Hide all markers first
+  markers.forEach(m => m.visible = false);
+  
+  let closestDist = 999;
+  let closestPos = new THREE.Vector3(999, 999, 999);
+  let isTouching = false;
+  
+  // Current time for velocity calc
+  const now = performance.now();
+
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    let markerIndex = 0;
+
+    results.multiHandLandmarks.forEach((landmarks, handIndex) => {
+      // --- Gesture Detection (Peace Sign) ---
+      // Index(8) & Middle(12) Extended, Ring(16) & Pinky(20) Folded
+      // Note: y is 0 at top, 1 at bottom. So Extended means tip.y < pip.y
+      
+      const indexExtended = landmarks[8].y < landmarks[6].y;
+      const middleExtended = landmarks[12].y < landmarks[10].y;
+      const ringFolded = landmarks[16].y > landmarks[14].y;
+      const pinkyFolded = landmarks[20].y > landmarks[18].y;
+      
+      if (indexExtended && middleExtended && ringFolded && pinkyFolded) {
+         peaceSignDuration += 16; // approx ms per frame
+      } else {
+         peaceSignDuration = 0;
+      }
+
+      if (peaceSignDuration > 1000 && !isRecording) {
+         startRecording();
+         peaceSignDuration = 0;
+      }
+      
+      fingerTipIndices.forEach(tipIdx => {
+        if (markerIndex >= MAX_FINGERS) return;
+
+        const tip = landmarks[tipIdx];
+        
+        // 座標変換 (Mirror)
+        const visibleHeight = 2 * Math.tan((camera.fov * Math.PI / 180) / 2) * camera.position.z;
+        const visibleWidth = visibleHeight * camera.aspect;
+        
+        const x = (0.5 - tip.x) * visibleWidth; 
+        const y = (0.5 - tip.y) * visibleHeight;
+        const z = 0; 
+        
+        const handPos = new THREE.Vector3(x, y, z);
+        
+        // Activate marker
+        const marker = markers[markerIndex];
+        marker.position.copy(handPos);
+        marker.visible = true;
+        markerIndex++;
+
+        // Distance to Jelly
+        const dist = handPos.distanceTo(jelly.position);
+        
+        // Track closest for shader interaction
+        if (dist < closestDist) {
+          closestDist = dist;
+          closestPos.copy(handPos);
+        }
+
+        // --- Interaction Logic ---
+        // Calculate Velocity
+        const key = `${handIndex}_${tipIdx}`;
+        let speed = 0;
+        
+        if (prevFingerStates[key]) {
+          const prev = prevFingerStates[key];
+          const dt = now - prev.time;
+          if (dt > 0) {
+            const dPos = handPos.distanceTo(prev.pos);
+            speed = dPos / dt * 1000; // units per second
+          }
+        }
+        
+        // Update history
+        prevFingerStates[key] = { pos: handPos.clone(), time: now };
+
+        // Collision Check
+        // Jelly Radius approx 1.8 * scale
+        const hitRadius = 1.8 * jelly.scale.x; 
+        
+        if (dist < hitRadius + 0.2) { // +0.2 margin
+          isTouching = true;
+          
+          if (speed > 15.0) { 
+            // 強く当たった -> 消滅 & 復活
+            if (jelly.visible) {
+               jelly.visible = false;
+               // Respawn after 3 seconds
+               setTimeout(() => {
+                 jelly.scale.set(0.5, 0.5, 0.5);
+                 jelly.visible = true;
+               }, 3000);
+            }
+          } else {
+            // 優しく -> 大きくなる
+            if (jelly.visible) {
+              jelly.scale.addScalar(0.005);
+              if (jelly.scale.x > 2.0) jelly.scale.setScalar(2.0); // Max limit
+            }
+          }
+        }
+      });
+    });
+    
+    // Shader update
+    interactionUniforms.uHandPos.value.copy(closestPos);
+    
+    if (closestDist < 2.5 * jelly.scale.x) {
+       interactionUniforms.uStrength.value += (1.0 - interactionUniforms.uStrength.value) * 0.1;
+    } else {
+       interactionUniforms.uStrength.value += (0.0 - interactionUniforms.uStrength.value) * 0.1;
+    }
+
+  } else {
+    peaceSignDuration = 0;
+    interactionUniforms.uStrength.value *= 0.9;
+    interactionUniforms.uHandPos.value.set(999, 999, 999);
+  }
+}
+
+function startRecording() {
+  if (isRecording) return;
+  console.log("Start Recording GIF...");
+  isRecording = true;
+  recordStartTime = performance.now();
+  
+  gif = new GIF({
+    workers: 2,
+    quality: 10,
+    workerScript: 'gif.worker.js',
+    width: 640, // Resize for performance
+    height: 360
+  });
+  
+  // Visual Indicator
+  const div = document.createElement('div');
+  div.id = 'rec-indicator';
+  div.innerText = "REC";
+  div.style.position = 'absolute';
+  div.style.top = '10px';
+  div.style.left = '10px';
+  div.style.color = 'red';
+  div.style.fontSize = '30px';
+  div.style.fontWeight = 'bold';
+  document.body.appendChild(div);
+}
+
+function stopRecording() {
+  if (!isRecording) return;
+  console.log("Stop Recording GIF...");
+  isRecording = false;
+  
+  const div = document.getElementById('rec-indicator');
+  if (div) div.remove();
+  
+  div.innerText = "Encoding...";
+  document.body.appendChild(div);
+
+  gif.on('finished', function(blob) {
+    window.open(URL.createObjectURL(blob));
+    if (div) div.remove();
+  });
+
+  gif.render();
+}
+
+
+const hands = new Hands({locateFile: (file) => {
+  return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+}});
+hands.setOptions({
+  maxNumHands: 2, // 両手 (Up to 10 fingers)
+  modelComplexity: 1,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5
+});
+hands.onResults(onResults);
+
+const cameraUtils = new Camera(videoElement, {
+  onFrame: async () => {
+    await hands.send({image: videoElement});
+  },
+  width: 1280,
+  height: 720
+});
+cameraUtils.start();
+
+// --------------------------------------------------------
+// Animation Loop
+// --------------------------------------------------------
+let time = 0;
+let lastTime = 0;
+const fpsInterval = 1000 / 15; // 15 FPS
+
+function animate(currentTime) {
+  requestAnimationFrame(animate);
+  
+  const delta = currentTime - lastTime;
+  if (delta > fpsInterval) {
+    lastTime = currentTime - (delta % fpsInterval);
+    
+    time += 0.016 * (delta / 16.66); // 時間経過補正（概算）
+
+    if (material.userData.shader) {
+      material.userData.shader.uniforms.time.value = time;
+    }
+    
+    controls.update();
+    renderer.render(scene, camera);
+    
+    // GIF Recording
+    if (isRecording) {
+      gif.addFrame(renderer.domElement, {copy: true, delay: fpsInterval});
+      if (performance.now() - recordStartTime > RECORD_DURATION) {
+        stopRecording();
+      }
+    }
+  }
+}
+animate(0);
+
+// リサイズ対応
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  bgMaterial.uniforms.resolution.value.set(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
