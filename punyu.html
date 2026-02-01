@@ -121,12 +121,25 @@ const jelly = jellyEffect.mesh;
 jelly.position.set(0, 0, 0);
 scene.add(jelly);
 
+// Inner Jelly (Jelly in Jelly)
+const innerJellyEffect = new JellyEffect(10); // Slightly less detail
+const innerJelly = innerJellyEffect.mesh;
+innerJelly.scale.set(0.4, 0.4, 0.4); // 40% size of parent
+// Adjust material for inner jelly to be more visible inside
+innerJelly.material.color.setHex(0xffaaaa); // Slightly reddish/pinkish core
+innerJelly.material.thickness = 1.0; 
+jelly.add(innerJelly); // Add as child of main jelly
+
 const material = jelly.material; // For compatibility if referenced elsewhere
 const interactionUniforms = jellyEffect.uniforms;
+const innerInteractionUniforms = innerJellyEffect.uniforms;
 
 // --------------------------------------------------------
 // Finger Markers & MediaPipe
 // --------------------------------------------------------
+// Pass both uniforms or handle inner update in animate? 
+// MediaPipeController currently only updates one set of uniforms.
+// We should link them.
 const mediaPipeController = new MediaPipeController(scene, camera, renderer, jelly, interactionUniforms);
 mediaPipeController.start(videoElement);
 
@@ -149,6 +162,16 @@ function animate(currentTime) {
     if (material.userData.shader) {
       // material.userData.shader.uniforms.time.value = time; // Managed by jellyEffect
       jellyEffect.update(time);
+    }
+    
+    // Update Inner Jelly
+    if (innerJelly.material.userData.shader) {
+        innerJellyEffect.update(time);
+        // Sync interaction
+        innerJellyEffect.setInteraction(
+            interactionUniforms.uHandPos.value, 
+            interactionUniforms.uStrength.value
+        );
     }
     
     controls.update();

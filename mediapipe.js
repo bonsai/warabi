@@ -120,16 +120,16 @@ export class MediaPipeController {
       if (now - this.lastFrameTime > 100) {
         // Create a temporary canvas for cropping
         const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = this.cropParams.width;
-        tempCanvas.height = this.cropParams.height;
+        tempCanvas.width = this.cropParams.dWidth;
+        tempCanvas.height = this.cropParams.dHeight;
         const ctx = tempCanvas.getContext('2d');
         
         // Draw cropped image
         // void ctx.drawImage(image, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight);
         ctx.drawImage(
             this.renderer.domElement, 
-            this.cropParams.sx, this.cropParams.sy, this.cropParams.width, this.cropParams.height,
-            0, 0, this.cropParams.width, this.cropParams.height
+            this.cropParams.sx, this.cropParams.sy, this.cropParams.sWidth, this.cropParams.sHeight,
+            0, 0, this.cropParams.dWidth, this.cropParams.dHeight
         );
 
         this.gif.addFrame(tempCanvas, {copy: true, delay: 100});
@@ -163,25 +163,30 @@ export class MediaPipeController {
     this.recordStartTime = performance.now();
     
     // Crop to center (square-ish)
-    // Original canvas size is window size. 
-    // We want a center crop. Let's aim for 480x480 or similar aspect ratio.
-    const size = Math.min(this.renderer.domElement.width, this.renderer.domElement.height);
-    const cropSize = Math.min(size, 480); // Limit max size
+    // Source dimensions (Physical pixels)
+    const srcW = this.renderer.domElement.width;
+    const srcH = this.renderer.domElement.height;
+    const sourceSize = Math.min(srcW, srcH);
+    
+    // Output dimensions (GIF size) - Max 480px
+    const outSize = Math.min(sourceSize, 480);
 
     this.gif = new window.GIF({
       workers: 2,
       quality: 10,
       workerScript: 'gif.worker.js',
-      width: cropSize,
-      height: cropSize
+      width: outSize,
+      height: outSize
     });
     
     // Store crop parameters for update()
     this.cropParams = {
-        sx: (this.renderer.domElement.width - cropSize) / 2,
-        sy: (this.renderer.domElement.height - cropSize) / 2,
-        width: cropSize,
-        height: cropSize
+        sx: (srcW - sourceSize) / 2,
+        sy: (srcH - sourceSize) / 2,
+        sWidth: sourceSize,
+        sHeight: sourceSize,
+        dWidth: outSize,
+        dHeight: outSize
     };
 
     const div = document.createElement('div');
@@ -276,9 +281,30 @@ export class MediaPipeController {
             this.thumbUpDuration = 0;
         }
 
-        // 3. Shaking Palm -> Disabled per user request
+        // 3. Prayer (Namaste) -> Burst (Only when HUGE)
+    if (results.multiHandLandmarks.length === 2) {
+        const hand1 = results.multiHandLandmarks[0];
+        const hand2 = results.multiHandLandmarks[1];
         
-        // Debug Info
+        // Wrist distance
+        const wrist1 = new THREE.Vector3(hand1[0].x, hand1[0].y, 0);
+        const wrist2 = new THREE.Vector3(hand2[0].x, hand2[0].y, 0);
+        const wristDist = wrist1.distanceTo(wrist2);
+
+        // Index tip distance
+        const tip1 = new THREE.Vector3(hand1[8].x, hand1[8].y, 0);
+        const tip2 = new THREE.Vector3(hand2[8].x, hand2[8].y, 0);
+        const tipDist = tip1.distanceTo(tip2);
+        
+        // Threshold for prayer (normalized coords)
+        if (wristDist < 0.2 && tipDist < 0.2) {
+            if (this.jelly.scale.x >= this.MAX_BURST_SCALE * 0.95) {
+                this.burstJelly();
+            }
+        }
+    }
+
+    // Debug Info
         const debugEl = document.getElementById('debug-info');
         if (debugEl) {
             let status = "None";
