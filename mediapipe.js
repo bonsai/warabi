@@ -13,7 +13,8 @@ export class MediaPipeController {
     this.GESTURE_THRESHOLD = 500;
     this.RECORD_DURATION = 6000;
     this.UNBREAKABLE_SCALE = 1.2;
-    this.MAX_BURST_SCALE = 2.5;
+    this.MAX_BURST_SCALE = 3.0;
+    this.BREAK_SPEED_THRESHOLD = 30.0;
     this.NO_HAND_THRESHOLD = 2000;
 
     // State
@@ -352,7 +353,7 @@ export class MediaPipeController {
           
           if (dist < hitRadius + 0.2) { 
             
-            if (speed > 15.0) { 
+            if (speed > this.BREAK_SPEED_THRESHOLD) { 
               if (this.jelly.scale.x < this.UNBREAKABLE_SCALE) {
                  this.burstJelly();
               } else {
