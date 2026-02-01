@@ -6,6 +6,32 @@
   <style>
     body { margin:0; overflow:hidden; background:#888; }
     canvas { display:block; }
+    #access-denied {
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.95);
+      color: white;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      z-index: 9999;
+      font-family: sans-serif;
+      text-align: center;
+      padding: 20px;
+    }
+    #debug-info {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      color: lime;
+      font-family: monospace;
+      font-size: 16px;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 10px;
+      pointer-events: none;
+      z-index: 100;
+    }
   </style>
   <script type="importmap">
   {
@@ -24,12 +50,26 @@
   <script src="gif.js"></script>
 </head>
 <body>
+<div id="access-denied">
+  <h1>⚠️ ACCESS RESTRICTED ⚠️</h1>
+  <p>This experience is ONLY available at <strong>WARABI STATION</strong>.</p>
+  <p id="location-status">Checking your location...</p>
+</div>
+
+<div id="debug-info">Initializing...</div>
+
 <!-- Video Element for MediaPipe (Hidden) -->
 <video id="input_video" style="display:none"></video>
 
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { checkAccess } from './area-lock.js';
+import { MediaPipeController } from './mediapipe.js';
+import { JellyEffect } from './jelly-effect.js';
+
+// Initialize Access Check
+checkAccess();
 
 const scene = new THREE.Scene();
 
@@ -105,393 +145,19 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 // --------------------------------------------------------
 // ゼリー本体
 // --------------------------------------------------------
-const geometry = new THREE.IcosahedronGeometry(1.8, 20); // より細かく
-
-const material = new THREE.MeshPhysicalMaterial({
-  color: 0xffffff,
-  metalness: 0.0,
-  roughness: 0.15,
-  transmission: 0.99,
-  ior: 1.4,
-  thickness: 0.5,
-  iridescence: 1.0,
-  iridescenceIOR: 1.33,
-  iridescenceThicknessRange: [100, 800],
-  clearcoat: 0.1,
-  clearcoatRoughness: 0.1,
-  side: THREE.DoubleSide
-});
-
-// インタラクション用のUniform
-const interactionUniforms = {
-  uHandPos: { value: new THREE.Vector3(999, 999, 999) }, // 手の位置
-  uStrength: { value: 0.0 } // 押す強さ
-};
-
-material.onBeforeCompile = (shader) => {
-  shader.uniforms.time = { value: 0 };
-  shader.uniforms.uHandPos = interactionUniforms.uHandPos;
-  shader.uniforms.uStrength = interactionUniforms.uStrength;
-  
-  material.userData.shader = shader;
-
-  shader.vertexShader = `
-    uniform float time;
-    uniform vec3 uHandPos;
-    uniform float uStrength;
-    varying vec3 vMyNormal;
-    varying vec3 vMyViewDir;
-    ${shader.vertexShader}
-  `.replace(
-    `#include <begin_vertex>`,
-    `#include <begin_vertex>
-
-    // 距離ベースの変形（手が近いとへこむ・揺れる）
-    float dist = distance(position, uHandPos);
-    float effect = smoothstep(1.5, 0.0, dist) * uStrength; // 近いほど影響大
-    
-    // ぷるぷる（基本）
-    float baseWave = sin(position.x * 2.5 + time * 3.0) * 0.1
-                   + sin(position.y * 3.0 + time * 2.5) * 0.1
-                   + sin(position.z * 3.5 + time * 2.8) * 0.05;
-
-    // 接触時の激しい揺れ
-    float touchWave = sin(position.x * 10.0 + time * 20.0) * 0.2
-                    + sin(position.y * 12.0 + time * 18.0) * 0.2;
-    
-    float wave = baseWave + touchWave * effect;
-    
-    // 手が触れている方向に少し押し込む
-    vec3 pushDir = normalize(position - uHandPos);
-    transformed += normal * wave + pushDir * effect * 0.5;
-    
-    // 視線計算用
-    vMyNormal = normalize(normalMatrix * normal);
-    vec4 mvPos = modelViewMatrix * vec4(transformed, 1.0);
-    vMyViewDir = -mvPos.xyz;
-    `
-  );
-
-  shader.fragmentShader = `
-    uniform float time;
-    varying vec3 vMyNormal;
-    varying vec3 vMyViewDir;
-    ${shader.fragmentShader}
-  `.replace(
-    `#include <color_fragment>`,
-    `#include <color_fragment>
-    
-    vec3 viewDir = normalize(vMyViewDir);
-    vec3 myNormal = normalize(vMyNormal);
-    float viewAngle = dot(myNormal, viewDir);
-
-    float hue = viewAngle * 0.5 + time * 0.1; 
-    vec3 rainbow = 0.5 + 0.5 * cos(6.28 * (hue + vec3(0.0, 0.33, 0.67)));
-    rainbow += 0.1;
-    diffuseColor.rgb = rainbow;
-    `
-  );
-};
-
-const jelly = new THREE.Mesh(geometry, material);
+const jellyEffect = new JellyEffect(20);
+const jelly = jellyEffect.mesh;
 jelly.position.set(0, 0, 0);
-jelly.scale.set(0.5, 0.5, 0.5); // はじめは半分の大きさ
 scene.add(jelly);
 
-// --------------------------------------------------------
-// Finger Markers (Up to 10 dots)
-// --------------------------------------------------------
-const MAX_FINGERS = 10;
-const markers = [];
-const markerGroup = new THREE.Group();
-scene.add(markerGroup);
-
-// Glow Texture Generation (Restore)
-const canvas = document.createElement('canvas');
-canvas.width = 64;
-canvas.height = 64;
-const ctx = canvas.getContext('2d');
-const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-gradient.addColorStop(0, 'rgba(255, 255, 0, 0.6)');
-gradient.addColorStop(1, 'rgba(255, 255, 0, 0.0)');
-ctx.fillStyle = gradient;
-ctx.fillRect(0, 0, 64, 64);
-const glowTexture = new THREE.CanvasTexture(canvas);
-
-// Create pool of markers
-for (let i = 0; i < MAX_FINGERS; i++) {
-  const g = new THREE.Group();
-  
-  // Core Dot
-  const dot = new THREE.Mesh(
-    new THREE.SphereGeometry(0.1, 16, 16),
-    new THREE.MeshBasicMaterial({ color: 0xffff00 })
-  );
-  g.add(dot);
-
-  // Glow
-  const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({ 
-      map: glowTexture, 
-      transparent: true, 
-      blending: THREE.AdditiveBlending 
-    })
-  );
-  sprite.scale.set(0.8, 0.8, 1.0);
-  g.add(sprite);
-  
-  g.visible = false;
-  markerGroup.add(g);
-  markers.push(g);
-}
-
-// Previous positions for velocity calculation
-// Key: "handIndex_tipIndex", Value: { pos: Vector3, time: number }
-const prevFingerStates = {}; 
+const material = jelly.material; // For compatibility if referenced elsewhere
+const interactionUniforms = jellyEffect.uniforms;
 
 // --------------------------------------------------------
-// MediaPipe Hands Setup
+// Finger Markers & MediaPipe
 // --------------------------------------------------------
-const fingerTipIndices = [4, 8, 12, 16, 20]; // Thumb, Index, Middle, Ring, Pinky
-const fingerPipIndices = [2, 6, 10, 14, 18]; // PIP or equivalent lower joint
-
-// GIF Recording State
-let isRecording = false;
-let peaceSignDuration = 0;
-let thumbUpDuration = 0;
-let openPalmDuration = 0;
-const GESTURE_THRESHOLD = 500; // ms
-let gif = null;
-const RECORD_DURATION = 3000; // 3 seconds recording
-let recordStartTime = 0;
-
-function onResults(results) {
-  // Hide all markers first
-  markers.forEach(m => m.visible = false);
-  
-  let closestDist = 999;
-  let closestPos = new THREE.Vector3(999, 999, 999);
-  let isTouching = false;
-  
-  // Current time for velocity calc
-  const now = performance.now();
-
-  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-    let markerIndex = 0;
-
-    results.multiHandLandmarks.forEach((landmarks, handIndex) => {
-      // --- Gesture Detection ---
-      // Note: y is 0 at top, 1 at bottom. So Extended means tip.y < pip.y (for upright hand)
-      
-      const thumbExtended = landmarks[4].y < landmarks[3].y;
-      const indexExtended = landmarks[8].y < landmarks[6].y;
-      const middleExtended = landmarks[12].y < landmarks[10].y;
-      const ringExtended = landmarks[16].y < landmarks[14].y;
-      const pinkyExtended = landmarks[20].y < landmarks[18].y;
-      
-      // 1. Peace Sign (✌️) -> Record
-      // Index & Middle Extended, Ring & Pinky Folded
-      if (indexExtended && middleExtended && !ringExtended && !pinkyExtended) {
-         peaceSignDuration += 16;
-      } else {
-         peaceSignDuration = 0;
-      }
-
-      if (peaceSignDuration > 1000 && !isRecording) { // 1 sec for Record
-         startRecording();
-         peaceSignDuration = 0;
-      }
-      
-      // 2. Thumbs Up (👍) -> Manual Respawn
-      // Thumb Extended, Others Folded
-      if (thumbExtended && !indexExtended && !middleExtended && !ringExtended && !pinkyExtended) {
-          thumbUpDuration += 16;
-      } else {
-          thumbUpDuration = 0;
-      }
-      
-      if (thumbUpDuration > GESTURE_THRESHOLD) {
-          if (!jelly.visible) {
-             jelly.scale.set(0.5, 0.5, 0.5);
-             jelly.visible = true;
-             console.log("Manual Respawn!");
-          }
-          thumbUpDuration = 0;
-      }
-
-      // 3. Open Palm (🖐️) -> End (Hide)
-      // All Extended
-      if (thumbExtended && indexExtended && middleExtended && ringExtended && pinkyExtended) {
-          openPalmDuration += 16;
-      } else {
-          openPalmDuration = 0;
-      }
-
-      if (openPalmDuration > GESTURE_THRESHOLD) {
-          if (jelly.visible) {
-              jelly.visible = false;
-              console.log("Manual End/Hide!");
-          }
-          openPalmDuration = 0;
-      }
-      
-      fingerTipIndices.forEach(tipIdx => {
-        if (markerIndex >= MAX_FINGERS) return;
-
-        const tip = landmarks[tipIdx];
-        
-        // 座標変換 (Mirror)
-        const visibleHeight = 2 * Math.tan((camera.fov * Math.PI / 180) / 2) * camera.position.z;
-        const visibleWidth = visibleHeight * camera.aspect;
-        
-        const x = (0.5 - tip.x) * visibleWidth; 
-        const y = (0.5 - tip.y) * visibleHeight;
-        const z = 0; 
-        
-        const handPos = new THREE.Vector3(x, y, z);
-        
-        // Activate marker
-        const marker = markers[markerIndex];
-        marker.position.copy(handPos);
-        marker.visible = true;
-        markerIndex++;
-
-        // Distance to Jelly
-        const dist = handPos.distanceTo(jelly.position);
-        
-        // Track closest for shader interaction
-        if (dist < closestDist) {
-          closestDist = dist;
-          closestPos.copy(handPos);
-        }
-
-        // --- Interaction Logic ---
-        // Calculate Velocity
-        const key = `${handIndex}_${tipIdx}`;
-        let speed = 0;
-        
-        if (prevFingerStates[key]) {
-          const prev = prevFingerStates[key];
-          const dt = now - prev.time;
-          if (dt > 0) {
-            const dPos = handPos.distanceTo(prev.pos);
-            speed = dPos / dt * 1000; // units per second
-          }
-        }
-        
-        // Update history
-        prevFingerStates[key] = { pos: handPos.clone(), time: now };
-
-        // Collision Check
-        // Jelly Radius approx 1.8 * scale
-        const hitRadius = 1.8 * jelly.scale.x; 
-        
-        if (dist < hitRadius + 0.2) { // +0.2 margin
-          isTouching = true;
-          
-          if (speed > 15.0) { 
-            // 強く当たった -> 消滅 & 復活
-            if (jelly.visible) {
-               jelly.visible = false;
-               // Respawn after 3 seconds
-               setTimeout(() => {
-                 jelly.scale.set(0.5, 0.5, 0.5);
-                 jelly.visible = true;
-               }, 3000);
-            }
-          } else {
-            // 優しく -> 大きくなる
-            if (jelly.visible) {
-              jelly.scale.addScalar(0.005);
-              if (jelly.scale.x > 2.0) jelly.scale.setScalar(2.0); // Max limit
-            }
-          }
-        }
-      });
-    });
-    
-    // Shader update
-    interactionUniforms.uHandPos.value.copy(closestPos);
-    
-    if (closestDist < 2.5 * jelly.scale.x) {
-       interactionUniforms.uStrength.value += (1.0 - interactionUniforms.uStrength.value) * 0.1;
-    } else {
-       interactionUniforms.uStrength.value += (0.0 - interactionUniforms.uStrength.value) * 0.1;
-    }
-
-  } else {
-    peaceSignDuration = 0;
-    interactionUniforms.uStrength.value *= 0.9;
-    interactionUniforms.uHandPos.value.set(999, 999, 999);
-  }
-}
-
-function startRecording() {
-  if (isRecording) return;
-  console.log("Start Recording GIF...");
-  isRecording = true;
-  recordStartTime = performance.now();
-  
-  gif = new GIF({
-    workers: 2,
-    quality: 10,
-    workerScript: 'gif.worker.js',
-    width: 640, // Resize for performance
-    height: 360
-  });
-  
-  // Visual Indicator
-  const div = document.createElement('div');
-  div.id = 'rec-indicator';
-  div.innerText = "REC";
-  div.style.position = 'absolute';
-  div.style.top = '10px';
-  div.style.left = '10px';
-  div.style.color = 'red';
-  div.style.fontSize = '30px';
-  div.style.fontWeight = 'bold';
-  document.body.appendChild(div);
-}
-
-function stopRecording() {
-  if (!isRecording) return;
-  console.log("Stop Recording GIF...");
-  isRecording = false;
-  
-  const div = document.getElementById('rec-indicator');
-  if (div) div.remove();
-  
-  div.innerText = "Encoding...";
-  document.body.appendChild(div);
-
-  gif.on('finished', function(blob) {
-    window.open(URL.createObjectURL(blob));
-    if (div) div.remove();
-  });
-
-  gif.render();
-}
-
-
-const hands = new Hands({locateFile: (file) => {
-  return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-}});
-hands.setOptions({
-  maxNumHands: 2, // 両手 (Up to 10 fingers)
-  modelComplexity: 1,
-  minDetectionConfidence: 0.5,
-  minTrackingConfidence: 0.5
-});
-hands.onResults(onResults);
-
-const cameraUtils = new Camera(videoElement, {
-  onFrame: async () => {
-    await hands.send({image: videoElement});
-  },
-  width: 1280,
-  height: 720
-});
-cameraUtils.start();
+const mediaPipeController = new MediaPipeController(scene, camera, renderer, jelly, interactionUniforms);
+mediaPipeController.start(videoElement);
 
 // --------------------------------------------------------
 // Animation Loop
@@ -510,19 +176,15 @@ function animate(currentTime) {
     time += 0.016 * (delta / 16.66); // 時間経過補正（概算）
 
     if (material.userData.shader) {
-      material.userData.shader.uniforms.time.value = time;
+      // material.userData.shader.uniforms.time.value = time; // Managed by jellyEffect
+      jellyEffect.update(time);
     }
     
     controls.update();
     renderer.render(scene, camera);
     
-    // GIF Recording
-    if (isRecording) {
-      gif.addFrame(renderer.domElement, {copy: true, delay: fpsInterval});
-      if (performance.now() - recordStartTime > RECORD_DURATION) {
-        stopRecording();
-      }
-    }
+    // GIF Recording & Updates
+    mediaPipeController.update(fpsInterval);
   }
 }
 animate(0);
