@@ -10,24 +10,20 @@ export class MediaPipeController {
 
     // Constants
     this.MAX_FINGERS = 10;
-    this.GESTURE_THRESHOLD = 500;
+    this.THUMB_SPAWN_TIME = 600;
+    this.AUTO_SPAWN_TIME = 2000;
+    this.PEACE_RECORD_TIME = 1000;
     this.RECORD_DURATION = 6000;
     this.UNBREAKABLE_SCALE = 1.2;
     this.MAX_BURST_SCALE = 3.0;
-    this.BREAK_SPEED_THRESHOLD = 30.0;
-    this.NO_HAND_THRESHOLD = 2000;
-
+    
     // State
     this.markers = [];
     this.prevFingerStates = {};
     this.peaceSignDuration = 0;
     this.thumbUpDuration = 0;
-    this.openPalmDuration = 0;
-    this.shakeCount = 0;
-    this.lastPalmX = null;
-    this.lastPalmDir = 0; // 1: right, -1: left
-    this.lastShakeTime = 0;
-    this.noHandDuration = 0;
+    this.respawnTimer = 0;
+    this.lastUpdateTime = performance.now();
     
     this.isRecording = false;
     this.recordStartTime = 0;
@@ -104,8 +100,22 @@ export class MediaPipeController {
   }
 
   update(fpsInterval) {
+    const now = performance.now();
+    const dt = now - this.lastUpdateTime;
+    this.lastUpdateTime = now;
+
+    // Auto Respawn (Standard 2s)
+    if (!this.jelly.visible) {
+        this.respawnTimer += dt;
+        if (this.respawnTimer > this.AUTO_SPAWN_TIME) {
+             this.resetJelly();
+             this.respawnTimer = 0;
+        }
+    } else {
+        this.respawnTimer = 0;
+    }
+
     if (this.isRecording && this.gif) {
-      const now = performance.now();
       // Limit GIF frame rate to ~10fps (100ms interval) to avoid crash
       if (now - this.lastFrameTime > 100) {
         // Create a temporary canvas for cropping
@@ -127,6 +137,7 @@ export class MediaPipeController {
       }
       
       if (now - this.recordStartTime > this.RECORD_DURATION) {
+        this.burstJelly(); // Burst at the end
         this.stopRecording();
       }
     }
@@ -136,9 +147,7 @@ export class MediaPipeController {
     if (!this.jelly.visible) return;
     this.jelly.visible = false;
     console.log("Jelly Burst!");
-    setTimeout(() => {
-        this.resetJelly();
-    }, 3000);
+    // Auto respawn handled in update()
   }
 
   resetJelly() {
@@ -232,7 +241,6 @@ export class MediaPipeController {
     const fingerTipIndices = [4, 8, 12, 16, 20];
 
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-      this.noHandDuration = 0;
       let markerIndex = 0;
 
       results.multiHandLandmarks.forEach((landmarks, handIndex) => {
@@ -242,69 +250,40 @@ export class MediaPipeController {
         const ringExtended = landmarks[16].y < landmarks[14].y;
         const pinkyExtended = landmarks[20].y < landmarks[18].y;
         
-        // 1. Peace Sign -> Record
+        // 1. Peace Sign -> Record (1s)
         if (indexExtended && middleExtended && !ringExtended && !pinkyExtended) {
            this.peaceSignDuration += 16;
         } else {
            this.peaceSignDuration = 0;
         }
 
-        if (this.peaceSignDuration > 1000 && !this.isRecording) {
+        if (this.peaceSignDuration > this.PEACE_RECORD_TIME && !this.isRecording) {
            this.startRecording();
            this.peaceSignDuration = 0;
         }
         
-        // 2. Thumbs Up -> Manual Respawn
+        // 2. Thumbs Up -> Spawn (0.6s)
         if (thumbExtended && !indexExtended && !middleExtended && !ringExtended && !pinkyExtended) {
             this.thumbUpDuration += 16;
         } else {
             this.thumbUpDuration = 0;
         }
         
-        if (this.thumbUpDuration > this.GESTURE_THRESHOLD) {
+        if (this.thumbUpDuration > this.THUMB_SPAWN_TIME) {
             if (!this.jelly.visible) {
                this.resetJelly();
             }
             this.thumbUpDuration = 0;
         }
 
-        // 3. Shaking Palm -> End (Hide)
-        // Detect horizontal shake
-        const palmX = landmarks[0].x; // Wrist/Palm base x
-        if (this.lastPalmX !== null) {
-            const dx = palmX - this.lastPalmX;
-            // Check direction change with sufficient speed
-            if (Math.abs(dx) > 0.02) { // Threshold for movement speed
-                const dir = dx > 0 ? 1 : -1;
-                if (this.lastPalmDir !== 0 && dir !== this.lastPalmDir) {
-                    this.shakeCount++;
-                    this.lastShakeTime = now;
-                }
-                this.lastPalmDir = dir;
-            }
-        }
-        this.lastPalmX = palmX;
-
-        // Reset shake count if too slow
-        if (now - this.lastShakeTime > 500) {
-            this.shakeCount = 0;
-        }
-
-        if (this.shakeCount > 4) { // 2 round trips
-            if (this.jelly.visible) {
-                this.jelly.visible = false;
-                console.log("Manual End/Hide (Shake)!");
-            }
-            this.shakeCount = 0;
-        }
+        // 3. Shaking Palm -> Disabled per user request
         
         // Debug Info
         const debugEl = document.getElementById('debug-info');
         if (debugEl) {
             let status = "None";
-            if (this.peaceSignDuration > 0) status = `Peace (${(this.peaceSignDuration/1000*100).toFixed(0)}%)`;
-            else if (this.thumbUpDuration > 0) status = `Thumb (${(this.thumbUpDuration/this.GESTURE_THRESHOLD*100).toFixed(0)}%)`;
-            else if (this.shakeCount > 0) status = `Shake (${this.shakeCount})`;
+            if (this.peaceSignDuration > 0) status = `Peace (${(this.peaceSignDuration/this.PEACE_RECORD_TIME*100).toFixed(0)}%)`;
+            else if (this.thumbUpDuration > 0) status = `Thumb (${(this.thumbUpDuration/this.THUMB_SPAWN_TIME*100).toFixed(0)}%)`;
             
             debugEl.innerHTML = `Gesture: ${status}<br>Jelly Scale: ${this.jelly.scale.x.toFixed(2)}`;
         }
@@ -336,35 +315,17 @@ export class MediaPipeController {
           }
 
           const key = `${handIndex}_${tipIdx}`;
-          let speed = 0;
-          
-          if (this.prevFingerStates[key]) {
-            const prev = this.prevFingerStates[key];
-            const dt = now - prev.time;
-            if (dt > 0) {
-              const dPos = handPos.distanceTo(prev.pos);
-              speed = dPos / dt * 1000;
-            }
-          }
-          
           this.prevFingerStates[key] = { pos: handPos.clone(), time: now };
 
           const hitRadius = 1.8 * this.jelly.scale.x; 
           
           if (dist < hitRadius + 0.2) { 
-            
-            if (speed > this.BREAK_SPEED_THRESHOLD) { 
-              if (this.jelly.scale.x < this.UNBREAKABLE_SCALE) {
-                 this.burstJelly();
-              } else {
-                 console.log("Too big to break!");
-              }
-            } else {
-              if (this.jelly.visible) {
-                this.jelly.scale.addScalar(0.005);
-                if (this.jelly.scale.x > this.MAX_BURST_SCALE) {
-                    this.burstJelly();
-                }
+            // Only grow, never break by impact
+            if (this.jelly.visible) {
+              this.jelly.scale.addScalar(0.005);
+              // Cap size
+              if (this.jelly.scale.x > this.MAX_BURST_SCALE) {
+                  this.jelly.scale.setScalar(this.MAX_BURST_SCALE);
               }
             }
           }
@@ -383,15 +344,7 @@ export class MediaPipeController {
       this.peaceSignDuration = 0;
       this.interactionUniforms.uStrength.value *= 0.9;
       this.interactionUniforms.uHandPos.value.set(999, 999, 999);
-
-      this.noHandDuration += 16;
-      if (this.noHandDuration > this.NO_HAND_THRESHOLD) {
-          if (this.jelly.visible && this.jelly.scale.x === 0.5) {
-          } else {
-               this.resetJelly();
-          }
-          this.noHandDuration = 0;
-      }
+      // No Hand Auto Spawn logic is now in update()
     }
   }
 }
