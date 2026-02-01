@@ -107,7 +107,21 @@ export class MediaPipeController {
       const now = performance.now();
       // Limit GIF frame rate to ~10fps (100ms interval) to avoid crash
       if (now - this.lastFrameTime > 100) {
-        this.gif.addFrame(this.renderer.domElement, {copy: true, delay: 100});
+        // Create a temporary canvas for cropping
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = this.cropParams.width;
+        tempCanvas.height = this.cropParams.height;
+        const ctx = tempCanvas.getContext('2d');
+        
+        // Draw cropped image
+        // void ctx.drawImage(image, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight);
+        ctx.drawImage(
+            this.renderer.domElement, 
+            this.cropParams.sx, this.cropParams.sy, this.cropParams.width, this.cropParams.height,
+            0, 0, this.cropParams.width, this.cropParams.height
+        );
+
+        this.gif.addFrame(tempCanvas, {copy: true, delay: 100});
         this.lastFrameTime = now;
       }
       
@@ -138,14 +152,28 @@ export class MediaPipeController {
     this.isRecording = true;
     this.recordStartTime = performance.now();
     
+    // Crop to center (square-ish)
+    // Original canvas size is window size. 
+    // We want a center crop. Let's aim for 480x480 or similar aspect ratio.
+    const size = Math.min(this.renderer.domElement.width, this.renderer.domElement.height);
+    const cropSize = Math.min(size, 480); // Limit max size
+
     this.gif = new window.GIF({
       workers: 2,
       quality: 10,
       workerScript: 'gif.worker.js',
-      width: 640,
-      height: 360
+      width: cropSize,
+      height: cropSize
     });
     
+    // Store crop parameters for update()
+    this.cropParams = {
+        sx: (this.renderer.domElement.width - cropSize) / 2,
+        sy: (this.renderer.domElement.height - cropSize) / 2,
+        width: cropSize,
+        height: cropSize
+    };
+
     const div = document.createElement('div');
     div.id = 'rec-indicator';
     div.innerText = "REC";
