@@ -258,6 +258,9 @@ const fingerPipIndices = [2, 6, 10, 14, 18]; // PIP or equivalent lower joint
 // GIF Recording State
 let isRecording = false;
 let peaceSignDuration = 0;
+let thumbUpDuration = 0;
+let openPalmDuration = 0;
+const GESTURE_THRESHOLD = 500; // ms
 let gif = null;
 const RECORD_DURATION = 3000; // 3 seconds recording
 let recordStartTime = 0;
@@ -277,24 +280,59 @@ function onResults(results) {
     let markerIndex = 0;
 
     results.multiHandLandmarks.forEach((landmarks, handIndex) => {
-      // --- Gesture Detection (Peace Sign) ---
-      // Index(8) & Middle(12) Extended, Ring(16) & Pinky(20) Folded
-      // Note: y is 0 at top, 1 at bottom. So Extended means tip.y < pip.y
+      // --- Gesture Detection ---
+      // Note: y is 0 at top, 1 at bottom. So Extended means tip.y < pip.y (for upright hand)
       
+      const thumbExtended = landmarks[4].y < landmarks[3].y;
       const indexExtended = landmarks[8].y < landmarks[6].y;
       const middleExtended = landmarks[12].y < landmarks[10].y;
-      const ringFolded = landmarks[16].y > landmarks[14].y;
-      const pinkyFolded = landmarks[20].y > landmarks[18].y;
+      const ringExtended = landmarks[16].y < landmarks[14].y;
+      const pinkyExtended = landmarks[20].y < landmarks[18].y;
       
-      if (indexExtended && middleExtended && ringFolded && pinkyFolded) {
-         peaceSignDuration += 16; // approx ms per frame
+      // 1. Peace Sign (✌️) -> Record
+      // Index & Middle Extended, Ring & Pinky Folded
+      if (indexExtended && middleExtended && !ringExtended && !pinkyExtended) {
+         peaceSignDuration += 16;
       } else {
          peaceSignDuration = 0;
       }
 
-      if (peaceSignDuration > 1000 && !isRecording) {
+      if (peaceSignDuration > 1000 && !isRecording) { // 1 sec for Record
          startRecording();
          peaceSignDuration = 0;
+      }
+      
+      // 2. Thumbs Up (👍) -> Manual Respawn
+      // Thumb Extended, Others Folded
+      if (thumbExtended && !indexExtended && !middleExtended && !ringExtended && !pinkyExtended) {
+          thumbUpDuration += 16;
+      } else {
+          thumbUpDuration = 0;
+      }
+      
+      if (thumbUpDuration > GESTURE_THRESHOLD) {
+          if (!jelly.visible) {
+             jelly.scale.set(0.5, 0.5, 0.5);
+             jelly.visible = true;
+             console.log("Manual Respawn!");
+          }
+          thumbUpDuration = 0;
+      }
+
+      // 3. Open Palm (🖐️) -> End (Hide)
+      // All Extended
+      if (thumbExtended && indexExtended && middleExtended && ringExtended && pinkyExtended) {
+          openPalmDuration += 16;
+      } else {
+          openPalmDuration = 0;
+      }
+
+      if (openPalmDuration > GESTURE_THRESHOLD) {
+          if (jelly.visible) {
+              jelly.visible = false;
+              console.log("Manual End/Hide!");
+          }
+          openPalmDuration = 0;
       }
       
       fingerTipIndices.forEach(tipIdx => {
