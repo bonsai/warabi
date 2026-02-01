@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/d",
+      "destination": "/punyu.html?debug=true"
+    },
+    {
       "source": "/",
       "destination": "/punyu.html"
     }

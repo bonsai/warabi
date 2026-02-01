@@ -12,6 +12,13 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 class HotReloadHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
+        # Redirect /d to /punyu.html?debug=true
+        if self.path == '/d':
+            self.send_response(302)
+            self.send_header('Location', '/punyu.html?debug=true')
+            self.end_headers()
+            return
+
         # Server-Sent Events endpoint
         if self.path == '/_events':
             self.send_response(200)
