@@ -32,7 +32,8 @@ export async function checkAccess() {
   }
 
   // Debug Bypass
-  if (debug === 'true' || debug === '1') {
+  // Check URL param OR path for /d shortcut (handled by Vercel rewrites but path remains /d in browser)
+  if (debug === 'true' || debug === '1' || window.location.pathname === '/d') {
      deniedEl.style.display = 'none';
      return;
   }
