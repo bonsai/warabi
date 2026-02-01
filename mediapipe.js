@@ -11,7 +11,7 @@ export class MediaPipeController {
     // Constants
     this.MAX_FINGERS = 10;
     this.GESTURE_THRESHOLD = 500;
-    this.RECORD_DURATION = 3000;
+    this.RECORD_DURATION = 6000;
     this.UNBREAKABLE_SCALE = 1.2;
     this.MAX_BURST_SCALE = 2.5;
     this.NO_HAND_THRESHOLD = 2000;
@@ -22,10 +22,15 @@ export class MediaPipeController {
     this.peaceSignDuration = 0;
     this.thumbUpDuration = 0;
     this.openPalmDuration = 0;
+    this.shakeCount = 0;
+    this.lastPalmX = null;
+    this.lastPalmDir = 0; // 1: right, -1: left
+    this.lastShakeTime = 0;
     this.noHandDuration = 0;
     
     this.isRecording = false;
     this.recordStartTime = 0;
+    this.lastFrameTime = 0; // For GIF frame rate limiting
     this.gif = null;
 
     this.initMarkers();
@@ -99,8 +104,14 @@ export class MediaPipeController {
 
   update(fpsInterval) {
     if (this.isRecording && this.gif) {
-      this.gif.addFrame(this.renderer.domElement, {copy: true, delay: fpsInterval});
-      if (performance.now() - this.recordStartTime > this.RECORD_DURATION) {
+      const now = performance.now();
+      // Limit GIF frame rate to ~10fps (100ms interval) to avoid crash
+      if (now - this.lastFrameTime > 100) {
+        this.gif.addFrame(this.renderer.domElement, {copy: true, delay: 100});
+        this.lastFrameTime = now;
+      }
+      
+      if (now - this.recordStartTime > this.RECORD_DURATION) {
         this.stopRecording();
       }
     }
@@ -155,12 +166,28 @@ export class MediaPipeController {
     const div = document.getElementById('rec-indicator');
     if (div) div.remove();
     
-    div.innerText = "Encoding...";
-    document.body.appendChild(div);
+    // Create status indicator
+    const statusDiv = document.createElement('div');
+    statusDiv.id = 'status-indicator';
+    statusDiv.innerText = "Encoding...";
+    statusDiv.style.position = 'absolute';
+    statusDiv.style.top = '10px';
+    statusDiv.style.left = '10px';
+    statusDiv.style.color = 'yellow';
+    statusDiv.style.fontSize = '24px';
+    statusDiv.style.fontWeight = 'bold';
+    document.body.appendChild(statusDiv);
 
     this.gif.on('finished', function(blob) {
-      window.open(URL.createObjectURL(blob));
-      if (div) div.remove();
+      // Auto Download
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `jelly-warabi-${Date.now()}.gif`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      if (statusDiv) statusDiv.remove();
     });
 
     this.gif.render();
@@ -212,19 +239,34 @@ export class MediaPipeController {
             this.thumbUpDuration = 0;
         }
 
-        // 3. Open Palm -> End (Hide)
-        if (thumbExtended && indexExtended && middleExtended && ringExtended && pinkyExtended) {
-            this.openPalmDuration += 16;
-        } else {
-            this.openPalmDuration = 0;
+        // 3. Shaking Palm -> End (Hide)
+        // Detect horizontal shake
+        const palmX = landmarks[0].x; // Wrist/Palm base x
+        if (this.lastPalmX !== null) {
+            const dx = palmX - this.lastPalmX;
+            // Check direction change with sufficient speed
+            if (Math.abs(dx) > 0.02) { // Threshold for movement speed
+                const dir = dx > 0 ? 1 : -1;
+                if (this.lastPalmDir !== 0 && dir !== this.lastPalmDir) {
+                    this.shakeCount++;
+                    this.lastShakeTime = now;
+                }
+                this.lastPalmDir = dir;
+            }
+        }
+        this.lastPalmX = palmX;
+
+        // Reset shake count if too slow
+        if (now - this.lastShakeTime > 500) {
+            this.shakeCount = 0;
         }
 
-        if (this.openPalmDuration > this.GESTURE_THRESHOLD) {
+        if (this.shakeCount > 4) { // 2 round trips
             if (this.jelly.visible) {
                 this.jelly.visible = false;
-                console.log("Manual End/Hide!");
+                console.log("Manual End/Hide (Shake)!");
             }
-            this.openPalmDuration = 0;
+            this.shakeCount = 0;
         }
         
         // Debug Info
@@ -233,7 +275,7 @@ export class MediaPipeController {
             let status = "None";
             if (this.peaceSignDuration > 0) status = `Peace (${(this.peaceSignDuration/1000*100).toFixed(0)}%)`;
             else if (this.thumbUpDuration > 0) status = `Thumb (${(this.thumbUpDuration/this.GESTURE_THRESHOLD*100).toFixed(0)}%)`;
-            else if (this.openPalmDuration > 0) status = `Palm (${(this.openPalmDuration/this.GESTURE_THRESHOLD*100).toFixed(0)}%)`;
+            else if (this.shakeCount > 0) status = `Shake (${this.shakeCount})`;
             
             debugEl.innerHTML = `Gesture: ${status}<br>Jelly Scale: ${this.jelly.scale.x.toFixed(2)}`;
         }
