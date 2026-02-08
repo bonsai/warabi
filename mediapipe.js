@@ -85,14 +85,14 @@ export class MediaPipeController {
     }
   }
 
-  start(videoElement) {
+  start(videoElement, config = {}) {
     const hands = new window.Hands({locateFile: (file) => {
       return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
     }});
     
     hands.setOptions({
       maxNumHands: 2,
-      modelComplexity: 1,
+      modelComplexity: config.modelComplexity !== undefined ? config.modelComplexity : 1,
       minDetectionConfidence: 0.5,
       minTrackingConfidence: 0.5
     });
@@ -103,8 +103,8 @@ export class MediaPipeController {
       onFrame: async () => {
         await hands.send({image: videoElement});
       },
-      width: 1280,
-      height: 720
+      width: config.videoWidth || 1280,
+      height: config.videoHeight || 720
     });
     
     cameraUtils.start();

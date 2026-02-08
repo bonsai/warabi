@@ -56,7 +56,10 @@ let config = {
   debug: false,
   bypassAccess: false,
   jellyDetail: 10, // Lighter for mobile
-  controlsEnabled: false
+  controlsEnabled: false,
+  videoWidth: 480,
+  videoHeight: 360,
+  modelComplexity: 0 // Lite model
 };
 
 // Routing Logic
@@ -67,6 +70,9 @@ if (path === '/d' || hash === '#/d') {
   config.bypassAccess = true;
   config.jellyDetail = 10;
   config.controlsEnabled = true;
+  config.videoWidth = 480;
+  config.videoHeight = 360;
+  config.modelComplexity = 0;
 } else if (path === '/d@pc' || hash === '#/d@pc') {
   // Debug PC
   config.mode = 'debug_pc';
@@ -74,6 +80,9 @@ if (path === '/d' || hash === '#/d') {
   config.bypassAccess = true;
   config.jellyDetail = 20;
   config.controlsEnabled = true;
+  config.videoWidth = 1280;
+  config.videoHeight = 720;
+  config.modelComplexity = 1;
 } else if (path === '/@pc' || hash === '#/@pc') {
   // PC Version (Current)
   config.mode = 'pc';
@@ -81,6 +90,9 @@ if (path === '/d' || hash === '#/d') {
   config.bypassAccess = false; // "Current" has checkAccess
   config.jellyDetail = 20;
   config.controlsEnabled = false; // "Current" has locked controls
+  config.videoWidth = 1280;
+  config.videoHeight = 720;
+  config.modelComplexity = 1;
 } else {
   // Root / Mobile
   // Default config applies
@@ -191,7 +203,7 @@ const interactionUniforms = jellyEffect.uniforms;
 // Finger Markers & MediaPipe
 // --------------------------------------------------------
 const mediaPipeController = new MediaPipeController(scene, camera, renderer, jelly, interactionUniforms);
-mediaPipeController.start(videoElement);
+mediaPipeController.start(videoElement, config);
 
 // --------------------------------------------------------
 // Animation Loop
