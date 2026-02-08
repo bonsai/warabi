@@ -85,7 +85,7 @@ export class MediaPipeController {
     }
   }
 
-  start(videoElement, config = {}) {
+  async start(videoElement, config = {}) {
     const hands = new window.Hands({locateFile: (file) => {
       return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
     }});
@@ -107,7 +107,7 @@ export class MediaPipeController {
       height: config.videoHeight || 720
     });
     
-    cameraUtils.start();
+    return cameraUtils.start();
   }
 
   update(fpsInterval) {

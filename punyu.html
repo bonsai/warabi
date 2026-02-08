@@ -101,7 +101,62 @@ if (path === '/d' || hash === '#/d') {
 console.log(`Starting in [${config.mode}] mode`, config);
 
 // Apply Access Check
-checkAccess(config.bypassAccess);
+async function init() {
+  const debugInfo = document.getElementById('debug-info');
+  function log(msg) {
+    console.log(msg);
+    if (debugInfo) debugInfo.innerText = msg;
+  }
+  
+  // Override console.error to show on screen
+  const originalError = console.error;
+  console.error = function(...args) {
+    originalError.apply(console, args);
+    if (debugInfo) {
+      debugInfo.style.color = 'red';
+      debugInfo.innerText = "Error: " + args.join(' ');
+    }
+  };
+
+  log("Requesting Location Access...");
+  
+  try {
+    // 1. Check Location
+    const allowed = await checkAccess(config.bypassAccess);
+    if (!allowed && !config.bypassAccess) {
+       log("Access Denied or Location Error.");
+       // Don't hide deniedEl, it shows the detail.
+       return; 
+    }
+
+    log("Location Verified. Initializing Camera & AI...");
+
+    // 2. Setup Scene (Already done above globally, but we could move it here if needed)
+    // For now, we assume scene setup is fast and synchronous enough.
+
+    // 3. Start MediaPipe
+    if (config.debug) {
+      document.getElementById('input_video').style.display = 'block';
+      // ... (style setting omitted for brevity, keeping existing logic below)
+    }
+
+    await mediaPipeController.start(videoElement, config);
+    
+    log("Ready!");
+    setTimeout(() => {
+        if (debugInfo) debugInfo.style.display = 'none';
+    }, 1000);
+
+    // 4. Start Animation Loop
+    animate(0);
+
+  } catch (e) {
+    console.error(e);
+    log("Init Failed: " + e.message);
+  }
+}
+
+// Initialization started at the end of script
 
 if (config.debug) {
   document.getElementById('input_video').style.display = 'block';
@@ -203,7 +258,7 @@ const interactionUniforms = jellyEffect.uniforms;
 // Finger Markers & MediaPipe
 // --------------------------------------------------------
 const mediaPipeController = new MediaPipeController(scene, camera, renderer, jelly, interactionUniforms);
-mediaPipeController.start(videoElement, config);
+// Start handled in init()
 
 // --------------------------------------------------------
 // Animation Loop
@@ -233,7 +288,6 @@ function animate(currentTime) {
     mediaPipeController.update(fpsInterval);
   }
 }
-animate(0);
 
 // リサイズ対応
 window.addEventListener('resize', () => {
@@ -251,6 +305,9 @@ window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   bgMaterial.uniforms.resolution.value.set(innerWidth, innerHeight);
 });
+
+// Start the application
+init();
 </script>
 </body>
 </html>

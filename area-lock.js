@@ -49,45 +49,55 @@ export async function checkAccess(bypass = false) {
     if (!response.ok) throw new Error("Failed to load areas.json");
     const areas = await response.json();
     
-    navigator.geolocation.getCurrentPosition((position) => {
-      const lat = position.coords.latitude;
-      const lon = position.coords.longitude;
-      
-      let allowed = false;
-      let minDist = 99999;
-      let nearestArea = null;
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition((position) => {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        
+        let allowed = false;
+        let minDist = 99999;
+        let nearestArea = null;
 
-      for (const area of areas) {
-          const dist = getDistanceFromLatLonInKm(lat, lon, area.lat, area.lon);
-          // Use area.radius if defined, default to 0.5km
-          const radius = area.radius !== undefined ? area.radius : 0.5;
-          
-          if (dist <= radius) {
-              allowed = true;
-              break;
-          }
-          if (dist < minDist) {
-              minDist = dist;
-              nearestArea = area;
-          }
-      }
-      
-      if (allowed) {
-         deniedEl.style.display = 'none';
-      } else {
-         if (nearestArea) {
-             statusEl.innerHTML = `<strong>${nearestArea.name}</strong>まで <strong>${minDist.toFixed(2)}km</strong> です。<br>エリア外です。`;
-         } else {
-             statusEl.innerText = "アクセスできません。有効なエリアが見つかりません。";
-         }
-      }
-    }, (error) => {
-      console.error(error);
-      statusEl.innerText = "位置情報を取得できません。位置情報の利用を許可してください。";
+        for (const area of areas) {
+            const dist = getDistanceFromLatLonInKm(lat, lon, area.lat, area.lon);
+            // Use area.radius if defined, default to 0.5km
+            const radius = area.radius !== undefined ? area.radius : 0.5;
+            
+            if (dist <= radius) {
+                allowed = true;
+                break;
+            }
+            if (dist < minDist) {
+                minDist = dist;
+                nearestArea = area;
+            }
+        }
+        
+        if (allowed) {
+           deniedEl.style.display = 'none';
+           resolve(true);
+        } else {
+           if (nearestArea) {
+               statusEl.innerHTML = `<strong>${nearestArea.name}</strong>まで <strong>${minDist.toFixed(2)}km</strong> です。<br>エリア外です。`;
+           } else {
+               statusEl.innerText = "アクセスできません。有効なエリアが見つかりません。";
+           }
+           resolve(false);
+        }
+      }, (error) => {
+        console.error(error);
+        statusEl.innerText = "位置情報を取得できません。位置情報の利用を許可してください。";
+        resolve(false);
+      }, {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      });
     });
 
   } catch (e) {
       console.error(e);
       statusEl.innerText = "システムエラー: エリア設定の読み込みに失敗しました。";
+      return false;
   }
 }
