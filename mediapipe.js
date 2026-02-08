@@ -1,18 +1,31 @@
 import * as THREE from 'three';
+import { GestureRecognizer } from './gesture.js';
 
 export class MediaPipeController {
-  constructor(scene, camera, renderer, jelly, interactionUniforms) {
+  constructor(scene, camera, renderer, jelly, interactionUniforms, innerJelly = null) {
     this.scene = scene;
     this.camera = camera;
     this.renderer = renderer;
     this.jelly = jelly;
+    this.innerJelly = innerJelly; // Optional Inner Jelly
     this.interactionUniforms = interactionUniforms;
+    
+    // Gesture Recognizer
+    this.gestureRecognizer = new GestureRecognizer();
+    
+    // Load config from gesture.json
+    fetch('./gesture.json')
+        .then(res => res.json())
+        .then(config => {
+            console.log("Loaded gesture config:", config);
+            this.gestureRecognizer.config = config;
+        })
+        .catch(err => console.warn("Using default gesture config (failed to load json)", err));
 
     // Constants
     this.MAX_FINGERS = 10;
     this.THUMB_SPAWN_TIME = 600;
     this.AUTO_SPAWN_TIME = 2000;
-    this.PEACE_RECORD_TIME = 1000;
     this.RECORD_DURATION = 6000;
     this.UNBREAKABLE_SCALE = 1.2;
     this.MAX_BURST_SCALE = 3.0;
@@ -20,14 +33,12 @@ export class MediaPipeController {
     // State
     this.markers = [];
     this.prevFingerStates = {};
-    this.peaceSignDuration = 0;
-    this.thumbUpDuration = 0;
     this.respawnTimer = 0;
     this.lastUpdateTime = performance.now();
     
     this.isRecording = false;
     this.recordStartTime = 0;
-    this.lastFrameTime = 0; // For GIF frame rate limiting
+    this.lastFrameTime = 0; 
     this.gif = null;
 
     this.initMarkers();
@@ -103,6 +114,9 @@ export class MediaPipeController {
     const now = performance.now();
     const dt = now - this.lastUpdateTime;
     this.lastUpdateTime = now;
+    
+    // Update Gesture State (for time-based resets)
+    this.gestureRecognizer.update(dt);
 
     // Auto Respawn (Standard 2s)
     if (!this.jelly.visible) {
@@ -249,67 +263,34 @@ export class MediaPipeController {
       let markerIndex = 0;
 
       results.multiHandLandmarks.forEach((landmarks, handIndex) => {
-        const thumbExtended = landmarks[4].y < landmarks[3].y;
-        const indexExtended = landmarks[8].y < landmarks[6].y;
-        const middleExtended = landmarks[12].y < landmarks[10].y;
-        const ringExtended = landmarks[16].y < landmarks[14].y;
-        const pinkyExtended = landmarks[20].y < landmarks[18].y;
+        // Gesture Detection
+        const detection = this.gestureRecognizer.detectHands(landmarks);
         
-        // 1. Peace Sign -> Record (1s)
-        if (indexExtended && middleExtended && !ringExtended && !pinkyExtended) {
-           this.peaceSignDuration += 16;
-        } else {
-           this.peaceSignDuration = 0;
-        }
-
-        if (this.peaceSignDuration > this.PEACE_RECORD_TIME && !this.isRecording) {
-           this.startRecording();
-           this.peaceSignDuration = 0;
+        if (detection.gesture === 'peace_record' && !this.isRecording) {
+            this.startRecording();
         }
         
-        // 2. Thumbs Up -> Spawn (0.6s)
-        if (thumbExtended && !indexExtended && !middleExtended && !ringExtended && !pinkyExtended) {
-            this.thumbUpDuration += 16;
-        } else {
-            this.thumbUpDuration = 0;
-        }
-        
-        if (this.thumbUpDuration > this.THUMB_SPAWN_TIME) {
-            if (!this.jelly.visible) {
+        if (detection.gesture === 'thumb_spawn') {
+             if (!this.jelly.visible) {
                this.resetJelly();
             }
-            this.thumbUpDuration = 0;
         }
 
         // 3. Prayer (Namaste) -> Burst (Only when HUGE)
-    if (results.multiHandLandmarks.length === 2) {
-        const hand1 = results.multiHandLandmarks[0];
-        const hand2 = results.multiHandLandmarks[1];
-        
-        // Wrist distance
-        const wrist1 = new THREE.Vector3(hand1[0].x, hand1[0].y, 0);
-        const wrist2 = new THREE.Vector3(hand2[0].x, hand2[0].y, 0);
-        const wristDist = wrist1.distanceTo(wrist2);
-
-        // Index tip distance
-        const tip1 = new THREE.Vector3(hand1[8].x, hand1[8].y, 0);
-        const tip2 = new THREE.Vector3(hand2[8].x, hand2[8].y, 0);
-        const tipDist = tip1.distanceTo(tip2);
-        
-        // Threshold for prayer (normalized coords)
-        if (wristDist < 0.2 && tipDist < 0.2) {
-            if (this.jelly.scale.x >= this.MAX_BURST_SCALE * 0.95) {
-                this.burstJelly();
+        if (results.multiHandLandmarks.length === 2) {
+            if (this.gestureRecognizer.detectPrayer(results.multiHandLandmarks[0], results.multiHandLandmarks[1])) {
+                if (this.jelly.scale.x >= this.MAX_BURST_SCALE * 0.95) {
+                    this.burstJelly();
+                }
             }
         }
-    }
 
-    // Debug Info
+        // Debug Info
         const debugEl = document.getElementById('debug-info');
         if (debugEl) {
             let status = "None";
-            if (this.peaceSignDuration > 0) status = `Peace (${(this.peaceSignDuration/this.PEACE_RECORD_TIME*100).toFixed(0)}%)`;
-            else if (this.thumbUpDuration > 0) status = `Thumb (${(this.thumbUpDuration/this.THUMB_SPAWN_TIME*100).toFixed(0)}%)`;
+            if (detection.progress.peace > 0) status = `Peace (${(detection.progress.peace*100).toFixed(0)}%)`;
+            else if (detection.progress.thumb > 0) status = `Thumb (${(detection.progress.thumb*100).toFixed(0)}%)`;
             
             debugEl.innerHTML = `Gesture: ${status}<br>Jelly Scale: ${this.jelly.scale.x.toFixed(2)}`;
         }
@@ -346,6 +327,15 @@ export class MediaPipeController {
           const hitRadius = 1.8 * this.jelly.scale.x; 
           
           if (dist < hitRadius + 0.2) { 
+            // Register Hit for Rapid Tap
+            if (this.innerJelly && this.gestureRecognizer.registerHit()) {
+                // Trigger Rapid Tap Action -> Show Inner Jelly
+                console.log("Rapid Tap Detected! Spawning Inner Jelly.");
+                this.innerJelly.visible = true;
+                // Maybe reset inner jelly scale to small?
+                this.innerJelly.scale.set(0.01, 0.01, 0.01);
+            }
+
             // Only grow, never break by impact
             if (this.jelly.visible) {
               this.jelly.scale.addScalar(0.005);
@@ -367,7 +357,7 @@ export class MediaPipeController {
       }
 
     } else {
-      this.peaceSignDuration = 0;
+      this.gestureRecognizer.reset();
       this.interactionUniforms.uStrength.value *= 0.9;
       this.interactionUniforms.uHandPos.value.set(999, 999, 999);
       // No Hand Auto Spawn logic is now in update()

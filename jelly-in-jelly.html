@@ -2,8 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Jelly Iridescent</title>
+  <title>Jelly in Jelly (Rapid Tap)</title>
   <link rel="stylesheet" href="style.css">
   <script type="importmap">
   {
@@ -23,10 +22,9 @@
 </head>
 <body>
 <div id="access-denied">
-  <h1>わらび餅ゲットチャレンジ</h1>
-  <p>蕨市（わらびし）で、究極の「ぷにゅぷにゅ」を手に入れろ！</p>
-  <p>このコンテンツは<strong>蕨駅周辺</strong>限定でプレイ可能です。</p>
-  <p id="location-status">位置情報を確認中...</p>
+  <h1>⚠️ ACCESS RESTRICTED ⚠️</h1>
+  <p>This experience is ONLY available at <strong>WARABI STATION</strong>.</p>
+  <p id="location-status">Checking your location...</p>
 </div>
 
 <div id="debug-info">Initializing...</div>
@@ -42,73 +40,12 @@ import { MediaPipeController } from './mediapipe.js';
 import { JellyEffect } from './jelly-effect.js';
 
 // Initialize Access Check
-// checkAccess(); // Moved to after config
-
-// --------------------------------------------------------
-// Configuration & Routing
-// --------------------------------------------------------
-const path = window.location.pathname;
-const hash = window.location.hash;
-
-// Default: Mobile
-let config = {
-  mode: 'mobile',
-  debug: false,
-  bypassAccess: false,
-  jellyDetail: 10, // Lighter for mobile
-  controlsEnabled: false
-};
-
-// Routing Logic
-if (path === '/d' || hash === '#/d') {
-  // Debug Mobile
-  config.mode = 'debug_mobile';
-  config.debug = true;
-  config.bypassAccess = true;
-  config.jellyDetail = 10;
-  config.controlsEnabled = true;
-} else if (path === '/d@pc' || hash === '#/d@pc') {
-  // Debug PC
-  config.mode = 'debug_pc';
-  config.debug = true;
-  config.bypassAccess = true;
-  config.jellyDetail = 20;
-  config.controlsEnabled = true;
-} else if (path === '/@pc' || hash === '#/@pc') {
-  // PC Version (Current)
-  config.mode = 'pc';
-  config.debug = false;
-  config.bypassAccess = false; // "Current" has checkAccess
-  config.jellyDetail = 20;
-  config.controlsEnabled = false; // "Current" has locked controls
-} else {
-  // Root / Mobile
-  // Default config applies
-}
-
-console.log(`Starting in [${config.mode}] mode`, config);
-
-// Apply Access Check
-checkAccess(config.bypassAccess);
-
-if (config.debug) {
-  document.getElementById('input_video').style.display = 'block';
-  document.getElementById('input_video').style.width = '160px'; // Small preview
-  document.getElementById('input_video').style.position = 'absolute';
-  document.getElementById('input_video').style.bottom = '0';
-  document.getElementById('input_video').style.left = '0';
-  document.getElementById('input_video').style.zIndex = '999';
-}
+checkAccess();
 
 const scene = new THREE.Scene();
 
 const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
 camera.position.set(0, 0, 8);
-
-// Mobile Optimization: Adjust camera distance for portrait mode
-if (innerWidth < innerHeight) {
-    camera.position.z = 10;
-}
 
 const renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setSize(innerWidth, innerHeight);
@@ -117,12 +54,12 @@ document.body.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.enableRotate = config.controlsEnabled; 
-controls.enableZoom = config.controlsEnabled;
-controls.enablePan = config.controlsEnabled;
+controls.enableRotate = false; 
+controls.enableZoom = false;
+controls.enablePan = false;
 
 // --------------------------------------------------------
-// 背景（カメラ映像＋グレー＋荒く）
+// 背景
 // --------------------------------------------------------
 const videoElement = document.getElementById('input_video');
 const videoTexture = new THREE.VideoTexture(videoElement);
@@ -147,19 +84,13 @@ const bgMaterial = new THREE.ShaderMaterial({
     varying vec2 vUv;
     
     void main() {
-      // 左右反転 (Mirror)
       vec2 uv = vec2(1.0 - vUv.x, vUv.y);
-
-      // ピクセル化（より細かく）
-      float pixelSize = 4.0; // 10.0 -> 4.0
+      float pixelSize = 4.0; 
       vec2 dxy = pixelSize / resolution;
       vec2 coord = floor(uv / dxy) * dxy;
-      
       vec4 color = texture2D(tDiffuse, coord);
-      
-      // グレースケール & 暗くする (More Black)
       float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-      gl_FragColor = vec4(vec3(gray * 0.05), 1.0); // 0.15 -> 0.05 (Darker)
+      gl_FragColor = vec4(vec3(gray * 0.05), 1.0); 
     }
   `,
   depthTest: false,
@@ -179,18 +110,29 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 // --------------------------------------------------------
 // ゼリー本体
 // --------------------------------------------------------
-const jellyEffect = new JellyEffect(config.jellyDetail);
+const jellyEffect = new JellyEffect(20);
 const jelly = jellyEffect.mesh;
 jelly.position.set(0, 0, 0);
 scene.add(jelly);
 
-const material = jelly.material; // For compatibility if referenced elsewhere
+// Inner Jelly (Jelly in Jelly) - Initially Invisible
+const innerJellyEffect = new JellyEffect(10); 
+const innerJelly = innerJellyEffect.mesh;
+innerJelly.scale.set(0.01, 0.01, 0.01); // Tiny start
+innerJelly.visible = false;
+// Adjust material for inner jelly
+innerJelly.material.color.setHex(0xffaaaa); 
+innerJelly.material.thickness = 1.0; 
+jelly.add(innerJelly); 
+
+const material = jelly.material; 
 const interactionUniforms = jellyEffect.uniforms;
 
 // --------------------------------------------------------
 // Finger Markers & MediaPipe
 // --------------------------------------------------------
-const mediaPipeController = new MediaPipeController(scene, camera, renderer, jelly, interactionUniforms);
+// Pass innerJelly to controller
+const mediaPipeController = new MediaPipeController(scene, camera, renderer, jelly, interactionUniforms, innerJelly);
 mediaPipeController.start(videoElement);
 
 // --------------------------------------------------------
@@ -198,7 +140,7 @@ mediaPipeController.start(videoElement);
 // --------------------------------------------------------
 let time = 0;
 let lastTime = 0;
-const fpsInterval = 1000 / 15; // 15 FPS
+const fpsInterval = 1000 / 15; 
 
 function animate(currentTime) {
   requestAnimationFrame(animate);
@@ -207,35 +149,37 @@ function animate(currentTime) {
   if (delta > fpsInterval) {
     lastTime = currentTime - (delta % fpsInterval);
     
-    time += 0.016 * (delta / 16.66); // 時間経過補正（概算）
+    time += 0.016 * (delta / 16.66); 
 
     if (material.userData.shader) {
-      // material.userData.shader.uniforms.time.value = time; // Managed by jellyEffect
       jellyEffect.update(time);
+    }
+    
+    // Update Inner Jelly
+    if (innerJelly.visible && innerJelly.material.userData.shader) {
+        innerJellyEffect.update(time);
+        innerJellyEffect.setInteraction(
+            interactionUniforms.uHandPos.value, 
+            interactionUniforms.uStrength.value
+        );
+        
+        // Growth Animation
+        if (innerJelly.scale.x < 0.4) {
+             innerJelly.scale.addScalar(0.01);
+        }
     }
     
     controls.update();
     renderer.render(scene, camera);
     
-    // GIF Recording & Updates
     mediaPipeController.update(fpsInterval);
   }
 }
 animate(0);
 
-// リサイズ対応
 window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  
-  // Update camera distance on resize (optional, but good for rotation)
-  if (innerWidth < innerHeight) {
-      if (camera.position.z < 9) camera.position.z = 10;
-  } else {
-      // Reset if landscape? Maybe keep it flexible or don't force it back.
-      // Let's just ensure it's not too close.
-  }
-
   renderer.setSize(innerWidth, innerHeight);
   bgMaterial.uniforms.resolution.value.set(innerWidth, innerHeight);
 });

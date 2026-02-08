@@ -2,7 +2,15 @@
   "rewrites": [
     {
       "source": "/d",
-      "destination": "/punyu.html?debug=true"
+      "destination": "/punyu.html"
+    },
+    {
+      "source": "/d@pc",
+      "destination": "/punyu.html"
+    },
+    {
+      "source": "/@pc",
+      "destination": "/punyu.html"
     },
     {
       "source": "/",

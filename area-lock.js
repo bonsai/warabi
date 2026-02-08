@@ -18,7 +18,7 @@ function deg2rad(deg) {
   return deg * (Math.PI/180)
 }
 
-export async function checkAccess() {
+export async function checkAccess(bypass = false) {
   const urlParams = new URLSearchParams(window.location.search);
   const debug = urlParams.get('debug');
   
@@ -33,13 +33,14 @@ export async function checkAccess() {
 
   // Debug Bypass
   // Check URL param OR path for /d shortcut (handled by Vercel rewrites but path remains /d in browser)
-  if (debug === 'true' || debug === '1' || window.location.pathname === '/d') {
+  // Also respect the explicit bypass argument
+  if (bypass || debug === 'true' || debug === '1' || window.location.pathname === '/d') {
      deniedEl.style.display = 'none';
      return;
   }
   
   if (!navigator.geolocation) {
-    statusEl.innerText = "Geolocation is not supported by your browser.";
+    statusEl.innerText = "お使いのブラウザは位置情報をサポートしていません。";
     return;
   }
 
@@ -75,18 +76,18 @@ export async function checkAccess() {
          deniedEl.style.display = 'none';
       } else {
          if (nearestArea) {
-             statusEl.innerHTML = `You are <strong>${minDist.toFixed(2)}km</strong> away from ${nearestArea.name}.<br>Access Denied.`;
+             statusEl.innerHTML = `<strong>${nearestArea.name}</strong>まで <strong>${minDist.toFixed(2)}km</strong> です。<br>エリア外です。`;
          } else {
-             statusEl.innerText = "Access Denied. No valid areas found.";
+             statusEl.innerText = "アクセスできません。有効なエリアが見つかりません。";
          }
       }
     }, (error) => {
       console.error(error);
-      statusEl.innerText = "Unable to retrieve your location. Please allow location access.";
+      statusEl.innerText = "位置情報を取得できません。位置情報の利用を許可してください。";
     });
 
   } catch (e) {
       console.error(e);
-      statusEl.innerText = "System Error: Failed to load area configuration.";
+      statusEl.innerText = "システムエラー: エリア設定の読み込みに失敗しました。";
   }
 }

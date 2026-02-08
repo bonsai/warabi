@@ -1,0 +1,19 @@
+{
+  "thumb_spawn": {
+    "duration": 600
+  },
+  "peace_record": {
+    "duration": 400
+  },
+  "auto_spawn": {
+    "duration": 2000
+  },
+  "prayer_burst": {
+    "wrist_dist": 0.2,
+    "tip_dist": 0.2
+  },
+  "rapid_tap": {
+    "window": 1000,
+    "count": 3
+  }
+}
